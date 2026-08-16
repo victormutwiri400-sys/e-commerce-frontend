@@ -80,7 +80,7 @@ body::after {
   background-color: transparent !important;
 }
 
-/* 4. Frosted-glass content rows (Rooms / Dining / Gallery / Security) */
+/* 4. Frosted-glass content rows */
 .bg-white {
   background-color: rgba(255, 255, 255, 0.72) !important;
   backdrop-filter: blur(12px) saturate(1.1);

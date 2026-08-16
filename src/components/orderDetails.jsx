@@ -141,6 +141,7 @@ const OrderDetails = () => {
                   <thead>
                     <tr>
                       <th>Item</th>
+                      <th>Variant</th>
                       <th>Quantity</th>
                       <th>Price</th>
                     </tr>
@@ -149,6 +150,17 @@ const OrderDetails = () => {
                     {order.items?.map((item) => (
                       <tr key={item.id}>
                         <td>{item.title}</td>
+                        <td>
+                          {item.color || item.size ? (
+                            <span className="text-muted">
+                              {item.color ? `${item.color}` : ""}
+                              {item.color && item.size ? " / " : ""}
+                              {item.size || ""}
+                            </span>
+                          ) : (
+                            <span className="text-muted">—</span>
+                          )}
+                        </td>
                         <td>{item.quantity}</td>
                         <td>KES {item.price_at_purchase}</td>
                       </tr>

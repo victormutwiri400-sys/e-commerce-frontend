@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import api from "./api";
 import {
   FaCheckCircle,
@@ -11,6 +11,7 @@ import {
 } from "react-icons/fa";
 
 const Products = () => {
+  const navigate = useNavigate();
   const [products, setProducts] = useState([]);
   const [category, setCategory] = useState("");
   const [search, setSearch] = useState("");
@@ -61,11 +62,18 @@ const Products = () => {
     }
   };
 
-  const addToCart = async (productId) => {
+  const addToCart = async (product) => {
+    // If the product has variants, the user must pick a specific size/color.
+    // Redirect to the details page so they can select the variant first.
+    if (product.variants?.length > 0) {
+      navigate(`/products/${product.id}`);
+      return;
+    }
+
     try {
       const res = await api.post(
         "/api/cart",
-        { product_id: productId, quantity: 1 },
+        { product_id: product.id, quantity: 1 },
         { withCredentials: true },
       );
       setMessage(res.data.message || "Added to cart successfully.");
@@ -188,13 +196,14 @@ const Products = () => {
                   </Link>
                   <button
                     className="btn btn-success w-100 mb-2 rounded-pill"
-                    onClick={() => addToCart(product.id)}
+                    onClick={() => addToCart(product)}
                   >
                     <FaShoppingCart className="me-2" /> Add to Cart
                   </button>
                   <button
                     className="btn btn-outline-info text-dark w-100 rounded-pill"
-                    onClick={() => addToWishlist(product.id)} title="click the heart icon to add to wishlist"
+                    onClick={() => addToWishlist(product.id)}
+                    title="click the heart icon to add to wishlist"
                   >
                     <FaHeart
                       className="me-2"

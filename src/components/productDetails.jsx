@@ -55,12 +55,24 @@ const ProductDetails = () => {
   const addToCart = async () => {
     if (!product) return;
 
+    // If the product has variants, require the user to select one first
+    if (product.variants?.length > 0 && !form.selectedVariant) {
+      setSubmitState({
+        message: "",
+        error: "Please select a size / variant before adding to cart.",
+      });
+      return;
+    }
+
     try {
       const res = await api.post(
         "/api/cart",
         {
           product_id: product.id,
           quantity: Number(form.quantity),
+          // Send the exact variant the user picked so the cart and order
+          // decrement stock from the correct variant.
+          variant_id: form.selectedVariant || null,
         },
         { withCredentials: true },
       );

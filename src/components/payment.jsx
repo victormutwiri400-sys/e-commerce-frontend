@@ -6,13 +6,13 @@ import { FaMobileAlt, FaLock, FaCheckCircle, FaShareAlt } from "react-icons/fa";
 const Payment = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  
+
   const [orderId, setOrderId] = useState(location.state?.orderId || "");
   const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [successData, setSuccessData] = useState(null);
-  
+
   const [orderItems, setOrderItems] = useState([]);
   const [orderTotal, setOrderTotal] = useState(0);
   const [showAllItems, setShowAllItems] = useState(false);
@@ -26,7 +26,9 @@ const Payment = () => {
 
   const fetchOrderDetails = async () => {
     try {
-      const response = await api.get(`/orders/${orderId}`, { withCredentials: true });
+      const response = await api.get(`/orders/${orderId}`, {
+        withCredentials: true,
+      });
       setOrderItems(response.data.items || []);
       setOrderTotal(response.data.total_amount || 0);
     } catch (err) {
@@ -70,13 +72,15 @@ const Payment = () => {
     const shareText = `Hey! Could you please help me pay for my order #${orderId} (KES ${orderTotal}) on our store using this link: ${paymentLink}?`;
 
     if (navigator.share) {
-      navigator.share({
-        title: `Pay Order #${orderId}`,
-        text: shareText,
-        url: paymentLink,
-      }).catch(() => {
-        copyToClipboard(shareText);
-      });
+      navigator
+        .share({
+          title: `Pay Order #${orderId}`,
+          text: shareText,
+          url: paymentLink,
+        })
+        .catch(() => {
+          copyToClipboard(shareText);
+        });
     } else {
       copyToClipboard(shareText);
     }
@@ -111,24 +115,46 @@ const Payment = () => {
               <div className="card bg-light border-0 p-3 mb-4 rounded-3">
                 <div className="d-flex justify-content-between align-items-center mb-3">
                   <span className="fw-bold text-secondary">Order Preview</span>
-                  <span className="badge bg-success fs-6">KES {Number(orderTotal).toLocaleString()}</span>
+                  <span className="badge bg-success fs-6">
+                    KES {Number(orderTotal).toLocaleString()}
+                  </span>
                 </div>
-                
+
                 {/* Horizontal Layout for items */}
                 <div className="d-flex flex-column gap-3">
                   {displayedItems.map((item, index) => (
-                    <div key={index} className="card border-0 shadow-sm p-3 bg-white flex-row align-items-center gap-3 rounded-3">
+                    <div
+                      key={index}
+                      className="card border-0 shadow-sm p-3 bg-white flex-row align-items-center gap-3 rounded-3"
+                    >
                       <img
                         src={item.image_url || "https://via.placeholder.com/80"}
                         alt={item.title}
                         className="rounded-3 border"
-                        style={{ width: "75px", height: "75px", objectFit: "cover", flexShrink: 0 }}
+                        style={{
+                          width: "75px",
+                          height: "75px",
+                          objectFit: "cover",
+                          flexShrink: 0,
+                        }}
                       />
                       <div className="flex-grow-1">
                         <h6 className="mb-1 fw-bold text-dark">{item.title}</h6>
-                        <p className="mb-1 text-muted small">Quantity: {item.quantity}</p>
+                        {item.color || item.size ? (
+                          <p className="mb-1 text-muted small">
+                            {item.color ? `${item.color}` : ""}
+                            {item.color && item.size ? " / " : ""}
+                            {item.size || ""}
+                          </p>
+                        ) : null}
+                        <p className="mb-1 text-muted small">
+                          Quantity: {item.quantity}
+                        </p>
                         <div className="fw-semibold text-success">
-                          KES {Number(item.price_at_purchase * item.quantity).toLocaleString()}
+                          KES{" "}
+                          {Number(
+                            item.price_at_purchase * item.quantity,
+                          ).toLocaleString()}
                         </div>
                       </div>
                     </div>
@@ -141,14 +167,18 @@ const Payment = () => {
                     className="btn btn-link btn-sm text-decoration-none text-success mt-3 p-0 align-self-start fw-semibold"
                     onClick={() => setShowAllItems(!showAllItems)}
                   >
-                    {showAllItems ? "Show Less" : `View All Products (${orderItems.length} items)...`}
+                    {showAllItems
+                      ? "Show Less"
+                      : `View All Products (${orderItems.length} items)...`}
                   </button>
                 )}
               </div>
             )}
 
             {error && <div className="alert alert-danger">{error}</div>}
-            {copyFeedback && <div className="alert alert-info py-2 small">{copyFeedback}</div>}
+            {copyFeedback && (
+              <div className="alert alert-info py-2 small">{copyFeedback}</div>
+            )}
 
             {successData ? (
               <div className="alert alert-success text-center py-4">
@@ -181,11 +211,15 @@ const Payment = () => {
                     disabled
                     readOnly
                   />
-                  <div className="form-text text-muted">Order ID is locked for this transaction.</div>
+                  <div className="form-text text-muted">
+                    Order ID is locked for this transaction.
+                  </div>
                 </div>
 
                 <div className="mb-3">
-                  <label className="form-label fw-semibold">Safaricom Phone Number</label>
+                  <label className="form-label fw-semibold">
+                    Safaricom Phone Number
+                  </label>
                   <div className="input-group">
                     <span className="input-group-text">+254</span>
                     <input
@@ -216,7 +250,11 @@ const Payment = () => {
                 >
                   {loading ? (
                     <>
-                      <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                      <span
+                        className="spinner-border spinner-border-sm"
+                        role="status"
+                        aria-hidden="true"
+                      ></span>
                       Sending STK Push...
                     </>
                   ) : (

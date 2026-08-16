@@ -1,0 +1,1146 @@
+import os
+import base64
+import datetime
+from decimal import Decimal, InvalidOperation
+from flask_cors import CORS
+import pymysql
+import requests
+from flask import Flask, jsonify, request,session
+from requests.auth import HTTPBasicAuth
+from werkzeug.security import check_password_hash, generate_password_hash
+from dotenv import load_dotenv
+load_dotenv()
+
+
+def load_environment_file(filename=".env"):
+    """Load simple KEY=value pairs from .env without an extra dependency."""
+    if not os.path.exists(filename):
+        return
+    with open(filename, encoding="utf-8") as environment_file:
+        for line in environment_file:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+load_environment_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+app = Flask(__name__)
+app.secret_key = '5209'
+app.config['SESSION_COOKIE_SECURE'] = True      
+app.config['SESSION_COOKIE_SAMESITE'] = 'None'
+CORS(
+    app,
+    supports_credentials=True,
+    origins=[
+        "http://localhost:3000",
+        "http://localhost:5173"
+    ]
+)
+
+DB_CONFIG = {
+   "host": os.getenv("DB_HOST", "mysql-victordesigner.alwaysdata.net"),
+    "user": os.getenv("DB_USER", "victordesigner"),
+    "password": os.getenv("DB_PASSWORD", "project_1234"),
+    "database": os.getenv("DB_NAME", "victordesigner_e-commerce"),
+    "cursorclass": pymysql.cursors.DictCursor,
+    "autocommit": False,
+}
+
+MPESA_ENVIRONMENT = os.getenv("MPESA_ENVIRONMENT", "sandbox").lower()
+MPESA_BASE_URL = (
+    "https://api.safaricom.co.ke"
+    if MPESA_ENVIRONMENT == "production"
+    else "https://sandbox.safaricom.co.ke"
+)
+MPESA_CONSUMER_KEY = os.getenv("MPESA_CONSUMER_KEY")
+MPESA_CONSUMER_SECRET = os.getenv("MPESA_CONSUMER_SECRET")
+MPESA_SHORTCODE = os.getenv("MPESA_SHORTCODE")
+MPESA_PASSKEY = os.getenv("MPESA_PASSKEY")
+MPESA_CALLBACK_URL = os.getenv("MPESA_CALLBACK_URL")
+
+
+def mpesa_config_error():
+    required_vars = [
+        "MPESA_CONSUMER_KEY",
+        "MPESA_CONSUMER_SECRET",
+        "MPESA_SHORTCODE",
+        "MPESA_PASSKEY",
+        "MPESA_CALLBACK_URL"
+    ]
+    
+    missing = [var for var in required_vars if not os.getenv(var)]
+    
+    if missing:
+        return f"M-Pesa is not configured. Missing: {', '.join(missing)}"
+    return None
+
+
+def normalize_mpesa_phone(phone):
+    digits = "".join(char for char in str(phone) if char.isdigit())
+    if digits.startswith("0") and len(digits) == 10:
+        digits = "254" + digits[1:]
+    elif digits.startswith("7") and len(digits) == 9:
+        digits = "254" + digits
+    if len(digits) != 12 or not digits.startswith("2547"):
+        return None
+    return digits
+
+
+def get_mpesa_access_token():
+    response = requests.get(
+        f"{MPESA_BASE_URL}/oauth/v1/generate?grant_type=client_credentials",
+        auth=HTTPBasicAuth(MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET),
+        timeout=20,
+    )
+    response.raise_for_status()
+    token = response.json().get("access_token")
+    if not token:
+        raise ValueError("M-Pesa did not return an access token")
+    return token
+
+
+def get_db_connection():
+    return pymysql.connect(**DB_CONFIG)
+
+
+def json_ready(value):
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
+
+
+def serialize_row(row):
+    return {key: json_ready(value) for key, value in row.items()}
+
+
+def fetch_one(sql, params=None):
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql, params or ())
+            row = cursor.fetchone()
+            return serialize_row(row) if row else None
+    finally:
+        connection.close()
+
+
+def fetch_all(sql, params=None):
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql, params or ())
+            return [serialize_row(row) for row in cursor.fetchall()]
+    finally:
+        connection.close()
+
+
+def require_fields(data, fields):
+    missing = [field for field in fields if data.get(field) in (None, "")]
+    if missing:
+        return jsonify({"error": f"Missing required field(s): {', '.join(missing)}"}), 400
+    return None
+
+
+@app.errorhandler(pymysql.MySQLError)
+def handle_mysql_error(error):
+    return jsonify({"error": "Database error", "details": str(error)}), 500
+
+
+@app.errorhandler(404)
+def handle_not_found(_error):
+    return jsonify({"error": "Not found"}), 404
+
+
+@app.get("/")
+def home():
+    return jsonify(
+        {
+            "message": "E-commerce API is running",
+            "endpoints": [
+                "/users",
+                "/login",
+                "/products",
+                "/products/<id>",
+                "/products/<id>/variants",
+                "/orders",
+                "/orders/<id>",
+            ],
+        }
+    )
+
+
+@app.post("/users")
+def create_user():
+    data = request.get_json(silent=True) or {}
+    validation_error = require_fields(data, ["name", "email", "password"])
+    if validation_error:
+        return validation_error
+
+    role = data.get("role", "customer")
+    if role not in ("customer", "admin"):
+        return jsonify({"error": "Role must be 'customer' or 'admin'"}), 400
+
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO users (name, email, password_hash, role)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (
+                    data["name"],
+                    data["email"],
+                    generate_password_hash(data["password"]),
+                    role,
+                ),
+            )
+            user_id = cursor.lastrowid
+        connection.commit()
+    except pymysql.err.IntegrityError:
+        connection.rollback()
+        return jsonify({"error": "Email already exists"}), 409
+    finally:
+        connection.close()
+
+    return jsonify(fetch_one("SELECT id, name, email, role FROM users WHERE id = %s", (user_id,))), 201
+
+@app.route("/api/signin", methods=["POST"])
+def signin():
+    data = request.get_json(silent=True) or request.form
+    email = data.get("email")
+    password = data.get("password")
+
+    if not email or not password:
+        return jsonify({"message": "Email and password are required"}), 400
+
+    connection = get_db_connection()
+    cursor = connection.cursor(pymysql.cursors.DictCursor)
+
+    try:
+        cursor.execute("SELECT * FROM users WHERE email=%s", (email,))
+        user = cursor.fetchone()
+
+        if user and check_password_hash(user["password_hash"], password):
+            session["user_id"] = user["id"]
+            session["role"] = "user"
+            user.pop("password_hash", None)
+            return jsonify({"message":"Login successful","role":"user","user":user}), 200
+
+        cursor.execute("SELECT * FROM admins WHERE email=%s", (email,))
+        admin = cursor.fetchone()
+
+        if admin and check_password_hash(admin["password"], password):
+            session["user_id"] = admin["id"]
+            session["role"] = "admin"
+            admin.pop("password", None)
+            return jsonify({"message":"Login successful","role":"admin","admin":admin}), 200
+
+        return jsonify({"message":"Invalid email or password"}), 401
+
+    except Exception as e:
+        print("SIGNIN ERROR:", e)
+        return jsonify({"error":"Internal server error"}), 500
+
+    finally:
+        cursor.close()
+        connection.close()
+
+
+@app.route("/api/me", methods=["GET"])
+def me():
+    if "user_id" not in session:
+        return jsonify({"authenticated":False}), 401
+
+    connection = get_db_connection()
+    cursor = connection.cursor(pymysql.cursors.DictCursor)
+
+    try:
+        table = "admins" if session["role"] == "admin" else "users"
+        cursor.execute(f"SELECT id,name,email FROM {table} WHERE id=%s", (session["user_id"],))
+        account = cursor.fetchone()
+
+        if not account:
+            return jsonify({"authenticated":False}), 401
+
+        return jsonify({
+            "authenticated":True,
+            "role":session["role"],
+            session["role"]:account
+        }), 200
+
+    finally:
+        cursor.close()
+        connection.close()
+
+
+@app.route("/api/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return jsonify({"message":"Logged out successfully"}), 200
+
+@app.route("/api/createAdmin", methods=["POST"])
+def create_admin():
+    # Ensure only a logged-in superadmin can create new admins
+    if 'user_id' not in session:
+        return jsonify({"message": "Unauthorized access. Please log in."}), 401
+
+    data = request.get_json(silent=True) or request.form
+    
+    admin_email = data.get("admin_email")
+    admin_password = data.get("admin_password")
+    
+    name = data.get("name")
+    new_email = data.get("email")
+    new_password = data.get("new_password")
+    phone = data.get("phone")
+
+    connection = get_db_connection()
+    # Fixed: Use DictCursor so column names can be accessed as dictionary keys
+    cursor = connection.cursor(pymysql.cursors.DictCursor)
+
+    try:
+        # Verify the requesting user is a superadmin
+        cursor.execute("SELECT * FROM admins WHERE id = %s AND role = 'superadmin'", (session['user_id'],))
+        superadmin = cursor.fetchone()
+
+        if not superadmin or not check_password_hash(superadmin['password'], admin_password):
+            connection.close()
+            return jsonify({"message": "unauthorized"}), 403
+
+        # Hash the new admin's password before saving to the database
+        hashed_password = generate_password_hash(new_password)
+        
+        insert_sql = "INSERT INTO admins (username, email, password, phone, role) VALUES (%s, %s, %s, %s, 'admin')"
+        cursor.execute(insert_sql, (name, new_email, hashed_password, phone))
+        connection.commit()
+        connection.close()
+        
+        return jsonify({"message": "admin account created successfully"}), 201
+
+    except Exception as e:
+        connection.rollback()
+        connection.close()
+        print("CREATE ADMIN ERROR:", e) # Prints the exact error in your terminal
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/users")
+def get_users():
+    users = fetch_all("SELECT id, name, email FROM users ORDER BY id DESC")
+    return jsonify(users)
+
+
+@app.get("/users/<int:user_id>")
+def get_user(user_id):
+    user = fetch_one("SELECT id, name, email FROM users WHERE id = %s", (user_id,))
+    if not user:
+        return jsonify({"error": "user not found"}), 404
+    return jsonify(user)
+
+
+@app.post("/products")
+def create_product():
+    data = request.get_json(silent=True) or {}
+    validation_error = require_fields(data, ["title", "price", "category", "image_url"])
+    if validation_error:
+        return validation_error
+
+    if data["category"] not in ("books", "apparel"):
+        return jsonify({"error": "Category must be 'books' or 'apparel'"}), 400
+
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO products (title, description, price, category, image_url)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (
+                    data["title"],
+                    data.get("description"),
+                    data["price"],
+                    data["category"],
+                    data["image_url"],
+                ),
+            )
+            product_id = cursor.lastrowid
+        connection.commit()
+    finally:
+        connection.close()
+
+    return jsonify(fetch_one("SELECT * FROM products WHERE id = %s", (product_id,))), 201
+
+
+@app.get("/products")
+def get_products():
+    category = request.args.get("category")
+    search = request.args.get("search")
+
+    filters = []
+    params = []
+    if category:
+        filters.append("category = %s")
+        params.append(category)
+    if search:
+        filters.append("(title LIKE %s OR description LIKE %s)")
+        params.extend([f"%{search}%", f"%{search}%"])
+
+    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+    products = fetch_all(f"SELECT * FROM products {where_clause} ORDER BY id DESC", params)
+
+    # Attach every variant to its product with a single query (avoids N+1).
+    if products:
+        product_ids = [p["id"] for p in products]
+        placeholders = ", ".join(["%s"] * len(product_ids))
+        variants = fetch_all(
+            f"SELECT * FROM product_variants WHERE product_id IN ({placeholders}) ORDER BY id",
+            product_ids,
+        )
+        variants_by_product = {}
+        for variant in variants:
+            variants_by_product.setdefault(variant["product_id"], []).append(variant)
+        for product in products:
+            product["variants"] = variants_by_product.get(product["id"], [])
+
+    return jsonify(products)
+
+
+@app.get("/products/<int:product_id>")
+def get_product(product_id):
+    product = fetch_one("SELECT * FROM products WHERE id = %s", (product_id,))
+    if not product:
+        return jsonify({"error": "Product not found"}), 404
+
+    product["variants"] = fetch_all(
+        "SELECT * FROM product_variants WHERE product_id = %s ORDER BY id",
+        (product_id,),
+    )
+    return jsonify(product)
+
+
+@app.put("/products/<int:product_id>")
+def update_product(product_id):
+    data = request.get_json(silent=True) or {}
+    allowed_fields = ["title", "description", "price", "category", "image_url"]
+    updates = []
+    params = []
+
+    if data.get("category") and data["category"] not in ("books", "apparel"):
+        return jsonify({"error": "Category must be 'books' or 'apparel'"}), 400
+
+    for field in allowed_fields:
+        if field in data:
+            updates.append(f"{field} = %s")
+            params.append(data[field])
+
+    if not updates:
+        return jsonify({"error": "No valid fields provided"}), 400
+
+    params.append(product_id)
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"UPDATE products SET {', '.join(updates)} WHERE id = %s",
+                params,
+            )
+            if cursor.rowcount == 0:
+                connection.rollback()
+                return jsonify({"error": "Product not found"}), 404
+        connection.commit()
+    finally:
+        connection.close()
+
+    return jsonify(fetch_one("SELECT * FROM products WHERE id = %s", (product_id,)))
+
+
+@app.delete("/products/<int:product_id>")
+def delete_product(product_id):
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM products WHERE id = %s", (product_id,))
+            if cursor.rowcount == 0:
+                connection.rollback()
+                return jsonify({"error": "Product not found"}), 404
+        connection.commit()
+    finally:
+        connection.close()
+
+    return jsonify({"message": "Product deleted"})
+
+
+@app.post("/products/<int:product_id>/variants")
+def create_product_variant(product_id):
+    data = request.get_json(silent=True) or {}
+    stock_quantity = data.get("stock_quantity", 0)
+
+    if not fetch_one("SELECT id FROM products WHERE id = %s", (product_id,)):
+        return jsonify({"error": "Product not found"}), 404
+
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO product_variants (product_id, size, color, stock_quantity)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (product_id, data.get("size"), data.get("color"), stock_quantity),
+            )
+            variant_id = cursor.lastrowid
+        connection.commit()
+    finally:
+        connection.close()
+
+    return jsonify(fetch_one("SELECT * FROM product_variants WHERE id = %s", (variant_id,))), 201
+
+
+@app.get("/products/<int:product_id>/variants")
+def get_product_variants(product_id):
+    variants = fetch_all(
+        "SELECT * FROM product_variants WHERE product_id = %s ORDER BY id",
+        (product_id,),
+    )
+    return jsonify(variants)
+
+
+@app.put("/variants/<int:variant_id>")
+def update_product_variant(variant_id):
+    data = request.get_json(silent=True) or {}
+    allowed_fields = ["size", "color", "stock_quantity"]
+    updates = []
+    params = []
+
+    for field in allowed_fields:
+        if field in data:
+            updates.append(f"{field} = %s")
+            params.append(data[field])
+
+    if not updates:
+        return jsonify({"error": "No valid fields provided"}), 400
+
+    params.append(variant_id)
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"UPDATE product_variants SET {', '.join(updates)} WHERE id = %s",
+                params,
+            )
+            if cursor.rowcount == 0:
+                connection.rollback()
+                return jsonify({"error": "Variant not found"}), 404
+        connection.commit()
+    finally:
+        connection.close()
+
+    return jsonify(fetch_one("SELECT * FROM product_variants WHERE id = %s", (variant_id,)))
+
+
+@app.delete("/variants/<int:variant_id>")
+def delete_product_variant(variant_id):
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM product_variants WHERE id = %s", (variant_id,))
+            if cursor.rowcount == 0:
+                connection.rollback()
+                return jsonify({"error": "Variant not found"}), 404
+        connection.commit()
+    finally:
+        connection.close()
+
+    return jsonify({"message": "Variant deleted"})
+
+
+@app.post("/orders")
+def create_order():
+    data = request.get_json(silent=True) or {}
+    validation_error = require_fields(data, ["user_id", "items"])
+    if validation_error:
+        return validation_error
+
+    if not isinstance(data["items"], list) or not data["items"]:
+        return jsonify({"error": "Items must be a non-empty list"}), 400
+
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            # 1. Verify user exists
+            cursor.execute("SELECT id FROM users WHERE id = %s", (data["user_id"],))
+            if not cursor.fetchone():
+                connection.rollback()
+                return jsonify({"error": "User not found"}), 404
+
+            product_ids = [item.get("product_id") for item in data["items"]]
+            if any(product_id is None for product_id in product_ids):
+                connection.rollback()
+                return jsonify({"error": "Each item must include product_id"}), 400
+
+            # 2. Fetch products and prices
+            placeholders = ", ".join(["%s"] * len(product_ids))
+            cursor.execute(
+                f"SELECT id, price FROM products WHERE id IN ({placeholders})",
+                product_ids,
+            )
+            products = {product["id"]: product for product in cursor.fetchall()}
+
+            total_amount = Decimal("0.00")
+            order_items = []
+
+            for item in data["items"]:
+                prod_id = item["product_id"]
+                product = products.get(prod_id)
+                quantity = int(item.get("quantity", 1))
+                variant_id = item.get("variant_id")  # may be None
+
+                if not product:
+                    connection.rollback()
+                    return jsonify({"error": f"Product {prod_id} not found"}), 404
+                if quantity <= 0:
+                    connection.rollback()
+                    return jsonify({"error": "Quantity must be greater than 0"}), 400
+
+                # Resolve the variant to use for stock decrement.
+                if variant_id is not None:
+                    # User selected a specific variant (size/color) on the frontend.
+                    cursor.execute(
+                        """
+                        SELECT id, stock_quantity FROM product_variants
+                        WHERE id = %s AND product_id = %s
+                        """,
+                        (variant_id, prod_id),
+                    )
+                    variant = cursor.fetchone()
+                    if not variant:
+                        connection.rollback()
+                        return jsonify({
+                            "error": f"Variant {variant_id} not found for product {prod_id}"
+                        }), 404
+                    if variant["stock_quantity"] < quantity:
+                        connection.rollback()
+                        return jsonify({
+                            "error": f"Insufficient stock for product {prod_id} (variant {variant_id})"
+                        }), 400
+                else:
+                    # Backward compatibility: pick the first variant with enough stock.
+                    cursor.execute(
+                        """
+                        SELECT id, stock_quantity FROM product_variants
+                        WHERE product_id = %s AND stock_quantity >= %s
+                        LIMIT 1
+                        """,
+                        (prod_id, quantity),
+                    )
+                    variant = cursor.fetchone()
+                    if not variant:
+                        connection.rollback()
+                        return jsonify({
+                            "error": f"Insufficient stock or no variants available for product {prod_id}"
+                        }), 400
+
+                price = product["price"]
+                total_amount += price * quantity
+                # Save product_id, quantity, price, and the resolved variant id
+                order_items.append((prod_id, quantity, price, variant["id"]))
+
+            # 3. Insert into orders table
+            cursor.execute(
+                """
+                INSERT INTO orders (user_id, total_amount, status)
+                VALUES (%s, %s, %s)
+                """,
+                (data["user_id"], total_amount, data.get("status", "pending")),
+            )
+            order_id = cursor.lastrowid
+
+            # 4. Insert into order_items (with variant_id) AND decrement stock
+            for prod_id, quantity, price, variant_id in order_items:
+                cursor.execute(
+                    """
+                    INSERT INTO order_items
+                    (order_id, product_id, variant_id, quantity, price_at_purchase)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (order_id, prod_id, variant_id, quantity, price),
+                )
+
+                # Decrement stock from the product_variants table
+                cursor.execute(
+                    """
+                    UPDATE product_variants 
+                    SET stock_quantity = stock_quantity - %s 
+                    WHERE id = %s
+                    """,
+                    (quantity, variant_id),
+                )
+
+        connection.commit()
+    except Exception as e:
+        connection.rollback()
+        return jsonify({"error": "Database error", "details": str(e)}), 500
+    finally:
+        connection.close()
+
+    return jsonify(get_order_payload(order_id)), 201
+
+
+def get_order_payload(order_id):
+    order = fetch_one("SELECT * FROM orders WHERE id = %s", (order_id,))
+    if not order:
+        return None
+
+    # Join order_items with products AND the exact variant that was purchased.
+    # Uses oi.variant_id (stored at order time) so the correct color/size is shown.
+    order["items"] = fetch_all(
+        """
+        SELECT 
+            oi.id, 
+            oi.order_id, 
+            oi.product_id, 
+            oi.variant_id,
+            p.title, 
+            p.description, 
+            p.image_url, 
+            oi.quantity, 
+            oi.price_at_purchase,
+            pv.color,
+            pv.size
+        FROM order_items oi
+        JOIN products p ON p.id = oi.product_id
+        LEFT JOIN product_variants pv ON pv.id = oi.variant_id
+        WHERE oi.order_id = %s
+        ORDER BY oi.id
+        """,
+        (order_id,),
+    )
+    return order
+
+
+@app.get("/products-with-stock")
+def get_products_with_stock():
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT 
+                    p.id as product_id, 
+                    p.title, 
+                    p.price, 
+                    pv.id as variant_id, 
+                    pv.size, 
+                    pv.color, 
+                    pv.stock_quantity 
+                FROM products p
+                LEFT JOIN product_variants pv ON p.id = pv.product_id
+                """
+            )
+            results = cursor.fetchall()
+        return jsonify(results), 200
+    finally:
+        connection.close()
+
+
+@app.get("/orders")
+def get_orders():
+    # Include the customer's username and the purchased products (with their
+    # photo) so the admin dashboard/list views can show them directly.
+    orders = fetch_all(
+        """
+        SELECT o.id, o.user_id, o.total_amount, o.status,
+               u.name AS username
+        FROM orders o
+        LEFT JOIN users u ON u.id = o.user_id
+        ORDER BY o.id DESC
+        """,
+    )
+    for order in orders:
+        order["items"] = fetch_all(
+            """
+            SELECT p.title, p.image_url, oi.quantity, oi.price_at_purchase
+            FROM order_items oi
+            JOIN products p ON p.id = oi.product_id
+            WHERE oi.order_id = %s
+            ORDER BY oi.id
+            """,
+            (order["id"],),
+        )
+    return jsonify(orders)
+
+
+@app.get("/orders/<int:order_id>")
+def get_order(order_id):
+    order = get_order_payload(order_id)
+    if not order:
+        return jsonify({"error": "Order not found"}), 404
+    return jsonify(order)
+
+
+@app.post("/api/mpesa_payment")
+def mpesa_payment():
+    """Initiate an M-Pesa STK Push using the total of an existing order."""
+    config_error = mpesa_config_error()
+    if config_error:
+        return jsonify({"error": config_error}), 503
+
+    data = request.get_json(silent=True) or request.form.to_dict()
+    validation_error = require_fields(data, ["order_id", "phone"])
+    if validation_error:
+        return validation_error
+
+    try:
+        order_id = int(data["order_id"])
+    except (TypeError, ValueError):
+        return jsonify({"error": "order_id must be an integer"}), 400
+
+    order = fetch_one("SELECT id, total_amount, status FROM orders WHERE id = %s", (order_id,))
+    if not order:
+        return jsonify({"error": "Order not found"}), 404
+    if order["status"] == "paid":
+        return jsonify({"error": "Order has already been paid"}), 409
+
+    try:
+        amount = Decimal(str(order["total_amount"]))
+    except (InvalidOperation, TypeError, ValueError):
+        return jsonify({"error": "Order has an invalid total amount"}), 500
+    if amount <= 0 or amount != amount.to_integral_value():
+        return jsonify({"error": "Order total must be a positive whole number of KES"}), 400
+
+    phone = normalize_mpesa_phone(data["phone"])
+    if not phone:
+        return jsonify({"error": "phone must be a valid Kenyan Safaricom number"}), 400
+
+    timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S")
+    password = base64.b64encode(
+        f"{MPESA_SHORTCODE}{MPESA_PASSKEY}{timestamp}".encode("utf-8")
+    ).decode("utf-8")
+    payload = {
+        "BusinessShortCode": MPESA_SHORTCODE,
+        "Password": password,
+        "Timestamp": timestamp,
+        "TransactionType": "CustomerPayBillOnline",
+        "Amount": int(amount),
+        "PartyA": phone,
+        "PartyB": MPESA_SHORTCODE,
+        "PhoneNumber": phone,
+        "CallBackURL": MPESA_CALLBACK_URL,
+        "AccountReference": f"ORDER-{order_id}",
+        "TransactionDesc": f"Order {order_id}",
+    }
+
+    try:
+        access_token = get_mpesa_access_token()
+        response = requests.post(
+            f"{MPESA_BASE_URL}/mpesa/stkpush/v1/processrequest",
+            json=payload,
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=30,
+        )
+        response_data = response.json()
+        response.raise_for_status()
+    except (requests.RequestException, ValueError) as error:
+        return jsonify({"error": "Unable to initiate M-Pesa payment", "details": str(error)}), 502
+
+    if response_data.get("ResponseCode") != "0":
+        return jsonify({"error": "M-Pesa rejected the payment request", "mpesa": response_data}), 502
+
+    return jsonify({
+        "message": "STK Push sent. Complete the payment on your phone.",
+        "order_id": order_id,
+        "amount": int(amount),
+        "checkout_request_id": response_data.get("CheckoutRequestID"),
+        "customer_message": response_data.get("CustomerMessage"),
+    }), 202
+
+
+@app.post("/api/mpesa/callback")
+def mpesa_callback():
+    """Receive the asynchronous STK Push result from Safaricom."""
+    data = request.get_json(silent=True) or {}
+    callback = data.get("Body", {}).get("stkCallback", {})
+    checkout_request_id = callback.get("CheckoutRequestID")
+    if not checkout_request_id:
+        return jsonify({"ResultCode": 1, "ResultDesc": "Invalid callback"}), 400
+
+    result_code = callback.get("ResultCode")
+    metadata = {
+        item.get("Name"): item.get("Value")
+        for item in callback.get("CallbackMetadata", {}).get("Item", [])
+    }
+    status = "paid" if str(result_code) == "0" else "failed"
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT order_id FROM mpesa_payments WHERE checkout_request_id = %s",
+                (checkout_request_id,),
+            )
+            payment = cursor.fetchone()
+            if payment:
+                cursor.execute(
+                    """
+                    UPDATE mpesa_payments
+                    SET status = %s, result_code = %s, result_desc = %s,
+                        receipt_number = %s, paid_at = %s
+                    WHERE checkout_request_id = %s
+                    """,
+                    (status, result_code, callback.get("ResultDesc"), metadata.get("MpesaReceiptNumber"), metadata.get("TransactionDate"), checkout_request_id),
+                )
+                if status == "paid":
+                    cursor.execute("UPDATE orders SET status = 'paid' WHERE id = %s", (payment["order_id"],))
+        connection.commit()
+    finally:
+        connection.close()
+
+    # Safaricom expects a successful acknowledgement even if this callback is repeated.
+    return jsonify({"ResultCode": 0, "ResultDesc": "Accepted"})
+
+
+@app.get("/orders/<int:order_id>/mpesa-payment")
+def get_mpesa_payment(order_id):
+    payment = fetch_one(
+        "SELECT * FROM mpesa_payments WHERE order_id = %s ORDER BY id DESC LIMIT 1",
+        (order_id,),
+    )
+    if not payment:
+        return jsonify({"error": "No M-Pesa payment found for this order"}), 404
+    return jsonify(payment)
+
+
+@app.patch("/orders/<int:order_id>/status")
+def update_order_status(order_id):
+    data = request.get_json(silent=True) or {}
+    validation_error = require_fields(data, ["status"])
+    if validation_error:
+        return validation_error
+
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE orders SET status = %s WHERE id = %s",
+                (data["status"], order_id),
+            )
+            if cursor.rowcount == 0:
+                connection.rollback()
+                return jsonify({"error": "Order not found"}), 404
+        connection.commit()
+    finally:
+        connection.close()
+
+    return jsonify(get_order_payload(order_id))
+
+
+@app.get("/order-items")
+def get_order_items():
+    order_items = fetch_all("SELECT * FROM order_items ORDER BY id DESC")
+    return jsonify(order_items)
+
+@app.route('/api/cart', methods=['GET'])
+def get_cart():
+    if 'user_id' not in session:
+        return jsonify({"error": "Unauthorized access. Please log in."}), 401
+    
+    user_id = session['user_id']
+    conn = get_db_connection()
+    cursor = conn.cursor(pymysql.cursors.DictCursor)
+    
+    try:
+        # Return variant_id + color/size so the cart can display the selected variant
+        query = """
+            SELECT c.id, c.product_id, c.variant_id, c.quantity, p.title, p.price, p.image_url,
+                   pv.color, pv.size
+            FROM cart c 
+            JOIN products p ON c.product_id = p.id 
+            LEFT JOIN product_variants pv ON pv.id = c.variant_id
+            WHERE c.user_id = %s
+        """
+        cursor.execute(query, (user_id,))
+        cart_items = cursor.fetchall()
+        return jsonify(cart_items), 200
+    except Exception as e:
+        print("GET CART ERROR:", e)
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route('/api/cart', methods=['POST'])
+def add_to_cart():
+    if 'user_id' not in session:
+        return jsonify({"error": "Unauthorized access. Please log in."}), 401
+        
+    data = request.get_json()
+    product_id = data.get('product_id')
+    quantity = data.get('quantity', 1)
+    variant_id = data.get('variant_id')  # may be None for products without variants
+
+    if not product_id:
+        return jsonify({"error": "Product ID is required."}), 400
+
+    user_id = session['user_id']
+    conn = get_db_connection()
+    cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+    try:
+        # If a variant was selected, verify it belongs to this product
+        if variant_id is not None:
+            cursor.execute(
+                "SELECT id, stock_quantity FROM product_variants WHERE id = %s AND product_id = %s",
+                (variant_id, product_id),
+            )
+            variant = cursor.fetchone()
+            if not variant:
+                return jsonify({"error": "Variant not found for this product."}), 404
+            if variant['stock_quantity'] < int(quantity):
+                return jsonify({"error": "Insufficient stock for selected variant."}), 400
+
+        # Check if this exact product+variant combo is already in the cart
+        cursor.execute(
+            """
+            SELECT id, quantity FROM cart 
+            WHERE user_id = %s AND product_id = %s
+            AND ((%s IS NULL AND variant_id IS NULL) OR variant_id = %s)
+            """,
+            (user_id, product_id, variant_id, variant_id),
+        )
+        existing_item = cursor.fetchone()
+
+        if existing_item:
+            new_quantity = existing_item['quantity'] + int(quantity)
+            cursor.execute("UPDATE cart SET quantity = %s WHERE id = %s", (new_quantity, existing_item['id']))
+        else:
+            cursor.execute(
+                "INSERT INTO cart (user_id, product_id, variant_id, quantity) VALUES (%s, %s, %s, %s)",
+                (user_id, product_id, variant_id, quantity),
+            )
+        
+        conn.commit()
+        return jsonify({"message": "Item added to cart successfully."}), 201
+    except Exception as e:
+        conn.rollback()
+        print("ADD TO CART ERROR:", e)
+        return jsonify({"error": "Failed to add item to cart."}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route('/api/cart/<int:item_id>', methods=['DELETE'])
+def remove_from_cart(item_id):
+    if 'user_id' not in session:
+        return jsonify({"error": "Unauthorized access."}), 401
+
+    user_id = session['user_id']
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("DELETE FROM cart WHERE id = %s AND user_id = %s", (item_id, user_id))
+        conn.commit()
+        
+        if cursor.rowcount == 0:
+            return jsonify({"error": "Item not found or unauthorized."}), 404
+            
+        return jsonify({"message": "Item removed from cart."}), 200
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": "Failed to remove item."}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+
+# ==================== WISHLIST ENDPOINTS ====================
+
+@app.route('/api/wishlist', methods=['GET'])
+def get_wishlist():
+    if 'user_id' not in session:
+        return jsonify({"error": "Unauthorized access."}), 401
+
+    user_id = session['user_id']
+    conn = get_db_connection()
+    # Fixed: Added DictCursor so rows return as dictionaries
+    cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+    try:
+        # Fixed: changed p.name to p.title to match your products table
+        query = """
+            SELECT w.id, w.product_id, p.title, p.price, p.image_url 
+            FROM wishlist w 
+            JOIN products p ON w.product_id = p.id 
+            WHERE w.user_id = %s
+        """
+        cursor.execute(query, (user_id,))
+        wishlist_items = cursor.fetchall()
+        return jsonify(wishlist_items), 200
+    except Exception as e:
+        print("WISHLIST GET ERROR:", e)
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route('/api/wishlist', methods=['POST'])
+def toggle_wishlist():
+    if 'user_id' not in session:
+        return jsonify({"error": "Unauthorized access."}), 401
+
+    data = request.get_json()
+    product_id = data.get('product_id')
+
+    if not product_id:
+        return jsonify({"error": "Product ID is required."}), 400
+
+    user_id = session['user_id']
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("SELECT id FROM wishlist WHERE user_id = %s AND product_id = %s", (user_id, product_id))
+        existing = cursor.fetchone()
+
+        if existing:
+            cursor.execute("DELETE FROM wishlist WHERE id = %s", (existing['id'],))
+            conn.commit()
+            return jsonify({"message": "Removed from wishlist", "status": "removed"}), 200
+        else:
+            cursor.execute("INSERT INTO wishlist (user_id, product_id) VALUES (%s, %s)", (user_id, product_id))
+            conn.commit()
+            return jsonify({"message": "Added to wishlist", "status": "added"}), 201
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": "Failed to update wishlist."}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route('/api/wishlist/<int:item_id>', methods=['DELETE'])
+def remove_from_wishlist(item_id):
+    if 'user_id' not in session:
+        return jsonify({"error": "Unauthorized access."}), 401
+
+    user_id = session['user_id']
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("DELETE FROM wishlist WHERE id = %s AND user_id = %s", (item_id, user_id))
+        conn.commit()
+        
+        if cursor.rowcount == 0:
+            return jsonify({"error": "Item not found or unauthorized."}), 404
+            
+        return jsonify({"message": "Item removed from wishlist."}), 200
+    except Exception as e:
+        conn.rollback()
+        print("WISHLIST DELETE ERROR:", e)
+        return jsonify({"error": "Failed to remove item."}), 500
+    finally:
+        cursor.close()
+        conn.close()

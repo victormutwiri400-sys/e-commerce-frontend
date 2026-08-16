@@ -37,36 +37,59 @@ const Navbar = () => {
         <div className="collapse navbar-collapse" id="navbarNav">
           <ul className="navbar-nav ms-auto">
             <li className="nav-item">
-              <NavLink className="nav-link" to="/products" title="View Apparels and Books here">
+              <NavLink
+                className="nav-link"
+                to="/products"
+                title="View Apparels and Books here"
+              >
                 TRH Store
               </NavLink>
             </li>
             <li className="nav-item">
-              <NavLink className="nav-link" to="/cart" title="View your shopping cart">
-
+              <NavLink
+                className="nav-link"
+                to="/cart"
+                title="View your shopping cart"
+              >
                 Cart
               </NavLink>
             </li>
             <li className="nav-item">
-              <NavLink className="nav-link" to="/wishlist" title="View your wish products">
+              <NavLink
+                className="nav-link"
+                to="/wishlist"
+                title="View your wish products"
+              >
                 Wishlist
               </NavLink>
             </li>
             <li className="nav-item">
-              <NavLink className="nav-link" to="/payment" title="Proceed to payment">
+              <NavLink
+                className="nav-link"
+                to="/payment"
+                title="Proceed to payment"
+              >
                 Payment
               </NavLink>
             </li>
             {user && (
               <li className="nav-item">
-                <NavLink className="nav-link" to="/orders" title="View your order history">
+                <NavLink
+                  className="nav-link"
+                  to="/orders"
+                  title="View your order history"
+                >
                   Orders
                 </NavLink>
               </li>
             )}
             {admin && (
               <li className="nav-item">
-                <NavLink className="nav-link" to="/admin" title="Admin dashboard for managing products and orders">
+                <NavLink
+                  className="nav-link"
+                  to="/admin"
+                  title="Admin dashboard for managing products and orders"
+                >
                   Admin
                 </NavLink>
               </li>
@@ -74,12 +97,20 @@ const Navbar = () => {
             {!user ? (
               <>
                 <li className="nav-item">
-                  <NavLink className="nav-link" to="/signin" title="Sign in to your account">
+                  <NavLink
+                    className="nav-link"
+                    to="/signin"
+                    title="Sign in to your account"
+                  >
                     Sign in
                   </NavLink>
                 </li>
                 <li className="nav-item">
-                  <NavLink className="nav-link" to="/signup" title="Create a new account">
+                  <NavLink
+                    className="nav-link"
+                    to="/signup"
+                    title="Create a new account"
+                  >
                     Sign up
                   </NavLink>
                 </li>

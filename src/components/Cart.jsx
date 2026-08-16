@@ -101,6 +101,9 @@ const Cart = () => {
         items: items.map((item) => ({
           product_id: item.product_id,
           quantity: item.quantity,
+          // Include the specific variant selected by the user so the backend
+          // decrements stock from the correct variant, not just any variant.
+          variant_id: item.variant_id || null,
         })),
       };
 
@@ -111,8 +114,8 @@ const Cart = () => {
       const orderId = response.data.id;
       setMessage(`Order #${orderId} placed successfully.`);
       setItems([]);
-      
-      setTimeout(() => navigate('/payment', { state: { orderId } }), 1500);
+
+      setTimeout(() => navigate("/payment", { state: { orderId } }), 1500);
     } catch (err) {
       setError(err.response?.data?.error || "Checkout failed.");
     } finally {
@@ -144,7 +147,11 @@ const Cart = () => {
             Review your selected products and complete checkout.
           </p>
         </div>
-        <Link className="btn btn-outline-dark rounded-pill" to="/products" title="Continue shopping">
+        <Link
+          className="btn btn-outline-dark rounded-pill"
+          to="/products"
+          title="Continue shopping"
+        >
           <FaArrowLeft className="me-2" /> Continue Shopping
         </Link>
       </div>
@@ -194,6 +201,14 @@ const Cart = () => {
                       <p className="text-success fw-bold mb-0">
                         KES {item.price}
                       </p>
+                      {item.variant_id && (
+                        <p className="text-muted small mb-0">
+                          {item.color
+                            ? `${item.color}${item.size ? " / " : ""}`
+                            : ""}
+                          {item.size || ""}
+                        </p>
+                      )}
                     </div>
                     <div className="col-md-3">
                       <div className="d-flex justify-content-center align-items-center">

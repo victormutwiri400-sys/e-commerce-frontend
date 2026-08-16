@@ -13,17 +13,23 @@ function AdminDashboard() {
   const [allProducts, setAllProducts] = useState([]);
   const [allUsers, setAllUsers] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [singleUserLoading, setSingleUserLoading] = useState(false);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState("orders");
   const [progress, setProgress] = useState(0);
 
-  // Product form
+  // Combined Product & Initial Variant Form
   const [productForm, setProductForm] = useState({
     title: "",
     description: "",
     price: "",
     category: "books",
     image_url: "",
+    color: "",
+    size: "",
+    stock_quantity: "",
   });
   const [productMsg, setProductMsg] = useState("");
 
@@ -37,7 +43,7 @@ function AdminDashboard() {
     phone: "",
   });
 
-  // Variant form
+  // Standalone Variant form (for adding extra variants to existing products)
   const [variantForm, setVariantForm] = useState({
     product_id: "",
     color: "",
@@ -113,20 +119,28 @@ function AdminDashboard() {
   };
 
   const fetchAllProducts = async () => {
+    setProductsLoading(true);
     try {
       const response = await api.get("/products");
       setAllProducts(response.data || []);
     } catch (err) {
       console.error("Product Fetch Error:", err.message);
+      setError("Failed to load products");
+    } finally {
+      setProductsLoading(false);
     }
   };
 
   const fetchAllUsers = async () => {
+    setUsersLoading(true);
     try {
       const response = await api.get("/users");
       setAllUsers(response.data || []);
     } catch (err) {
       console.error("User Fetch Error:", err.message);
+      setError("Failed to load users");
+    } finally {
+      setUsersLoading(false);
     }
   };
 
@@ -135,23 +149,48 @@ function AdminDashboard() {
     setProductForm((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleVariantChange = (e) => {
-    const { name, value } = e.target;
-    setVariantForm((prev) => ({ ...prev, [name]: value }));
-  };
-
-  const submitProduct = async (e) => {
+  const submitProductWithVariant = async (e) => {
     e.preventDefault();
-    setProductMsg("Creating product...");
+    setProductMsg("Creating product and variant...");
     try {
-      const response = await api.post("/products", productForm);
-      setProductMsg(`Product created: ${response.data.title}`);
+      // 1. Create the product first using your existing /products endpoint
+      const productPayload = {
+        title: productForm.title,
+        description: productForm.description,
+        price: productForm.price,
+        category: productForm.category,
+        image_url: productForm.image_url,
+      };
+
+      const productResponse = await api.post("/products", productPayload);
+      const newProductId = productResponse.data.id;
+
+      // 2. If variant details are provided, automatically submit to your /products/<id>/variants endpoint
+      if (
+        newProductId &&
+        (productForm.color ||
+          productForm.size ||
+          productForm.stock_quantity !== "")
+      ) {
+        await api.post(`/products/${newProductId}/variants`, {
+          color: productForm.color,
+          size: productForm.size,
+          stock_quantity: Number(productForm.stock_quantity) || 0,
+        });
+      }
+
+      setProductMsg(
+        `Product successfully created: ${productResponse.data.title}`,
+      );
       setProductForm({
         title: "",
         description: "",
         price: "",
         category: "books",
         image_url: "",
+        color: "",
+        size: "",
+        stock_quantity: "",
       });
       fetchAllProducts();
     } catch (err) {
@@ -167,14 +206,11 @@ function AdminDashboard() {
     }
     setVariantMsg("Creating variant...");
     try {
-      const response = await api.post(
-        `/products/${variantForm.product_id}/variants`,
-        {
-          color: variantForm.color,
-          size: variantForm.size,
-          stock_quantity: Number(variantForm.stock_quantity),
-        },
-      );
+      await api.post(`/products/${variantForm.product_id}/variants`, {
+        color: variantForm.color,
+        size: variantForm.size,
+        stock_quantity: Number(variantForm.stock_quantity),
+      });
       setVariantMsg("Variant created successfully");
       setVariantForm({
         product_id: "",
@@ -204,10 +240,7 @@ function AdminDashboard() {
       if (updateProductForm.image_url)
         payload.image_url = updateProductForm.image_url;
 
-      const response = await api.put(
-        `/products/${updateProductForm.id}`,
-        payload,
-      );
+      await api.put(`/products/${updateProductForm.id}`, payload);
       setUpdateProductMsg("Product updated successfully");
       setUpdateProductForm({
         id: "",
@@ -288,6 +321,7 @@ function AdminDashboard() {
       );
     }
   };
+
   const handleAdmin = (e) =>
     setAdminForm({ ...adminForm, [e.target.name]: e.target.value });
 
@@ -311,12 +345,16 @@ function AdminDashboard() {
       setError("Enter user ID");
       return;
     }
+    setError("");
+    setSingleUserLoading(true);
     try {
       const response = await api.get(`/users/${userId}`);
       setSingleUser(response.data);
     } catch (err) {
       setError(err.response?.data?.error || "User not found");
       setSingleUser(null);
+    } finally {
+      setSingleUserLoading(false);
     }
   };
 
@@ -327,6 +365,55 @@ function AdminDashboard() {
     } catch (err) {
       setError("Error updating order status");
     }
+  };
+
+  // Prefill & scroll to the Update Product form with the selected product's ID
+  const handleUpdateProduct = (product) => {
+    setUpdateProductForm({
+      id: product.id,
+      title: product.title,
+      description: product.description,
+      price: product.price,
+      image_url: product.image_url,
+    });
+    document
+      .getElementById("update-product-card")
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
+  // Prefill & scroll to the Update Variant form with the first variant's ID
+  const handleUpdateVariant = async (product) => {
+    let variants = product.variants;
+    // The /products list response may not always include variants, so fetch
+    // the full product detail (which always includes variants) when needed.
+    if (!variants || variants.length === 0) {
+      setVariantMsg(`Loading variants for "${product.title}"...`);
+      try {
+        const res = await api.get(`/products/${product.id}`);
+        variants = res.data?.variants || [];
+      } catch (err) {
+        setVariantMsg(
+          "Error: " + (err.response?.data?.error || err.message),
+        );
+        return;
+      }
+    }
+    if (!variants || variants.length === 0) {
+      alert("This product has no variants to update.");
+      setVariantMsg("");
+      return;
+    }
+    const variant = variants[0];
+    setUpdateVariantForm({
+      id: variant.id,
+      color: variant.color || "",
+      size: variant.size || "",
+      stock_quantity: variant.stock_quantity ?? "",
+    });
+    setVariantMsg("");
+    document
+      .getElementById("update-variant-card")
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
   };
 
   if (!authorized) return null;
@@ -399,7 +486,8 @@ function AdminDashboard() {
                   <thead className="table-light">
                     <tr>
                       <th>Order ID</th>
-                      <th>User ID</th>
+                      <th>Username</th>
+                      <th>Products</th>
                       <th>Total Amount</th>
                       <th>Status</th>
                       <th>Action</th>
@@ -409,7 +497,43 @@ function AdminDashboard() {
                     {allOrders.map((order) => (
                       <tr key={order.id}>
                         <td>#{order.id}</td>
-                        <td>{order.user_id}</td>
+                        <td>
+                          {order.username ||
+                            allUsers.find((user) => user.id === order.user_id)
+                              ?.name ||
+                            `User #${order.user_id}`}
+                        </td>
+                        <td>
+                          {order.items && order.items.length > 0 ? (
+                            <div className="d-flex align-items-center gap-2">
+                              <img
+                                src={
+                                  order.items[0].image_url ||
+                                  "https://via.placeholder.com/40"
+                                }
+                                alt={order.items[0].title}
+                                className="rounded border"
+                                style={{
+                                  width: "40px",
+                                  height: "40px",
+                                  objectFit: "cover",
+                                }}
+                              />
+                              <span className="small">
+                                <span className="fw-semibold d-block">
+                                  {order.items[0].title}
+                                </span>
+                                {order.items.length > 1 && (
+                                  <span className="text-muted">
+                                    +{order.items.length - 1} more
+                                  </span>
+                                )}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-muted">—</span>
+                          )}
+                        </td>
                         <td>KES {order.total_amount}</td>
                         <td>
                           <select
@@ -446,13 +570,17 @@ function AdminDashboard() {
       {activeTab === "products" && (
         <>
           <div className="row g-3 mb-4">
+            {/* UNIFIED ADD PRODUCT + INITIAL VARIANT FORM */}
             <div className="col-md-6">
               <div className="card shadow-sm p-4">
-                <h5 className="fw-bold mb-3">Add Product</h5>
+                <h5 className="fw-bold mb-3 text-primary">
+                  Add Product & Initial Variant
+                </h5>
                 {productMsg && (
                   <div className="alert alert-info">{productMsg}</div>
                 )}
-                <form onSubmit={submitProduct}>
+                <form onSubmit={submitProductWithVariant}>
+                  <h6 className="text-muted mb-2">Product Information</h6>
                   <input
                     type="text"
                     className="form-control mb-2"
@@ -488,7 +616,7 @@ function AdminDashboard() {
                     required
                   />
                   <select
-                    className="form-select mb-2"
+                    className="form-select mb-3"
                     name="category"
                     value={productForm.category}
                     onChange={handleProductChange}
@@ -496,15 +624,53 @@ function AdminDashboard() {
                     <option value="books">Books</option>
                     <option value="apparel">Apparel</option>
                   </select>
+
+                  <hr />
+                  <h6 className="text-muted mb-2">
+                    Initial Variant (Optional)
+                  </h6>
+                  <div className="row g-2 mb-3">
+                    <div className="col">
+                      <input
+                        type="text"
+                        className="form-control"
+                        placeholder="Color"
+                        name="color"
+                        value={productForm.color}
+                        onChange={handleProductChange}
+                      />
+                    </div>
+                    <div className="col">
+                      <input
+                        type="text"
+                        className="form-control"
+                        placeholder="Size"
+                        name="size"
+                        value={productForm.size}
+                        onChange={handleProductChange}
+                      />
+                    </div>
+                    <div className="col">
+                      <input
+                        type="number"
+                        className="form-control"
+                        placeholder="Stock"
+                        name="stock_quantity"
+                        value={productForm.stock_quantity}
+                        onChange={handleProductChange}
+                      />
+                    </div>
+                  </div>
+
                   <button type="submit" className="btn btn-primary w-100">
-                    Add Product
+                    Save Product & Variant
                   </button>
                 </form>
               </div>
             </div>
 
             <div className="col-md-6">
-              <div className="card shadow-sm p-4">
+              <div className="card shadow-sm p-4 mb-3" id="update-product-card">
                 <h5 className="fw-bold mb-3">Update Product</h5>
                 {updateProductMsg && (
                   <div className="alert alert-info">{updateProductMsg}</div>
@@ -575,9 +741,7 @@ function AdminDashboard() {
                   </button>
                 </form>
               </div>
-            </div>
 
-            <div className="col-md-6">
               <div className="card shadow-sm p-4">
                 <h5 className="fw-bold mb-3">Delete Product</h5>
                 {deleteProductMsg && (
@@ -609,22 +773,72 @@ function AdminDashboard() {
                 <p>No products.</p>
               ) : (
                 <div className="table-responsive">
-                  <table className="table table-sm table-hover">
+                  <table className="table table-sm table-hover align-middle">
                     <thead className="table-light">
                       <tr>
                         <th>ID</th>
+                        <th>Image</th>
                         <th>Title</th>
                         <th>Price</th>
                         <th>Description</th>
+                        <th>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {allProducts.map((product) => (
                         <tr key={product.id}>
                           <td>{product.id}</td>
+                          <td>
+                            <img
+                              src={
+                                product.image_url ||
+                                "https://via.placeholder.com/40"
+                              }
+                              alt={product.title}
+                              className="rounded border"
+                              style={{
+                                width: "40px",
+                                height: "40px",
+                                objectFit: "cover",
+                              }}
+                            />
+                          </td>
                           <td>{product.title}</td>
                           <td>KES {product.price}</td>
                           <td>{product.description}</td>
+                          <td>
+                            <div className="dropdown">
+                              <button
+                                className="btn btn-sm btn-warning dropdown-toggle"
+                                type="button"
+                                data-bs-toggle="dropdown"
+                                aria-expanded="false"
+                              >
+                                Update
+                              </button>
+                              <ul className="dropdown-menu">
+                                <li>
+                                  <button
+                                    className="dropdown-item"
+                                    onClick={() => handleUpdateProduct(product)}
+                                  >
+                                    Update product (ID: {product.id})
+                                  </button>
+                                </li>
+                                <li>
+                                  <button
+                                    className="dropdown-item"
+                                    onClick={() => handleUpdateVariant(product)}
+                                  >
+                                    Update variant
+                                    {product.variants?.length
+                                      ? ` (ID: ${product.variants[0].id})`
+                                      : ""}
+                                  </button>
+                                </li>
+                              </ul>
+                            </div>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -642,7 +856,7 @@ function AdminDashboard() {
           <div className="row g-3 mb-4">
             <div className="col-md-6">
               <div className="card shadow-sm p-4">
-                <h5 className="fw-bold mb-3">Add Variant</h5>
+                <h5 className="fw-bold mb-3">Add Additional Variant</h5>
                 {variantMsg && (
                   <div className="alert alert-info">{variantMsg}</div>
                 )}
@@ -702,7 +916,7 @@ function AdminDashboard() {
             </div>
 
             <div className="col-md-6">
-              <div className="card shadow-sm p-4">
+              <div className="card shadow-sm p-4 mb-3" id="update-variant-card">
                 <h5 className="fw-bold mb-3">Update Variant</h5>
                 {updateVariantMsg && (
                   <div className="alert alert-info">{updateVariantMsg}</div>
@@ -762,9 +976,7 @@ function AdminDashboard() {
                   </button>
                 </form>
               </div>
-            </div>
 
-            <div className="col-md-6">
               <div className="card shadow-sm p-4">
                 <h5 className="fw-bold mb-3">Delete Variant</h5>
                 {deleteVariantMsg && (
