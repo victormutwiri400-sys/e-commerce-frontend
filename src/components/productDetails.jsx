@@ -170,8 +170,8 @@ const ProductDetails = () => {
 
       <div className="d-flex flex-column flex-md-row justify-content-between align-items-start gap-3 mb-4">
         <div>
-          <h1 className="fw-bold">{product.title}</h1>
-          <p className="text-muted mb-0">
+          <h1 className="fw-bold text-white">{product.title}</h1>
+          <p className="text-white mb-0">
             Premium product details and quick actions.
           </p>
         </div>

@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from "react-router-dom";
-import { getCurrentUser, clearCurrentUser, isAdminUser, logout } from "./auth";
+import { getCurrentUser, isAdminUser, logout } from "./auth";
 
 const Navbar = () => {
   const navigate = useNavigate();
@@ -20,7 +20,11 @@ const Navbar = () => {
     <nav className="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm">
       <div className="container">
         <NavLink className="navbar-brand fw-bold" to="/" title="Back to home">
-          E-Commerce
+          <img
+            src="https://th.bing.com/th/id/OIP.QXLcze8sMqdKN0okS7DsXwHaHa"
+            alt="E-Commerce"
+            className="navbar-logo"
+          />
         </NavLink>
         <button
           className="navbar-toggler"
@@ -61,15 +65,6 @@ const Navbar = () => {
                 title="View your wish products"
               >
                 Wishlist
-              </NavLink>
-            </li>
-            <li className="nav-item">
-              <NavLink
-                className="nav-link"
-                to="/payment"
-                title="Proceed to payment"
-              >
-                Payment
               </NavLink>
             </li>
             {user && (

@@ -10,6 +10,7 @@ const Signup = () => {
     password: "",
     role: "customer",
   });
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [status, setStatus] = useState({
     loading: false,
@@ -25,6 +26,23 @@ const Signup = () => {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    // Client-side validation mirrors the backend rules.
+    if (form.password.length < 8) {
+      setStatus({
+        loading: false,
+        message: "",
+        error: "Password must be at least 8 characters long.",
+      });
+      return;
+    }
+    if (form.password !== confirmPassword) {
+      setStatus({
+        loading: false,
+        message: "",
+        error: "Passwords do not match.",
+      });
+      return;
+    }
     setStatus({ loading: true, message: "", error: "" });
 
     try {
@@ -121,6 +139,23 @@ const Signup = () => {
                 {showPassword ? <FaEyeSlash /> : <FaEye />}
               </button>
             </div>
+            <div className="form-text text-muted">
+              At least 8 characters.
+            </div>
+          </div>
+
+          <div className="mb-3">
+            <label className="form-label">
+              <FaLock className="me-1" /> Confirm Password
+            </label>
+            <input
+              type={showPassword ? "text" : "password"}
+              placeholder="Re-enter your password"
+              className="form-control"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              required
+            />
           </div>
 
           <button type="submit" className="btn btn-primary w-100 py-2 mb-3">

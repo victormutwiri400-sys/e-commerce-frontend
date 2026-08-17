@@ -1,4 +1,4 @@
-import api from "./api";
+import api, { saveCsrfToken, clearCsrfToken } from "./api";
 
 export const AUTH_KEY = "user";
 
@@ -22,12 +22,13 @@ export const getSessionUser = async () => {
     const { data } = await api.get("/api/me");
     const resolvedUser = data.user || data.admin;
     const userPayload = { ...(resolvedUser || {}), role: data.role };
+    // Capture the CSRF token issued for this session.
+    if (data.csrf_token) saveCsrfToken(data.csrf_token);
     saveCurrentUser(userPayload);
     return data;
   } catch (error) {
-    const fallbackError = error;
     clearCurrentUser();
-    return fallbackError ? null : null;
+    return null;
   }
 };
 
@@ -36,5 +37,6 @@ export const logout = async () => {
     await api.post("/api/logout");
   } finally {
     clearCurrentUser();
+    clearCsrfToken();
   }
 };

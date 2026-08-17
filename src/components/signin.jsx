@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import api from "./api";
+import api, { saveCsrfToken } from "./api";
 import { saveCurrentUser } from "./auth";
 import { FaEye, FaEyeSlash, FaLock, FaEnvelope } from "react-icons/fa";
 
@@ -22,6 +22,9 @@ const Signin = () => {
     try {
       const { data } = await api.post("/api/signin", { email, password });
       const currentUser = data.user || data.admin;
+
+      // Keep the CSRF token issued by the server for this session.
+      if (data.csrf_token) saveCsrfToken(data.csrf_token);
 
       saveCurrentUser({ ...currentUser, role: data.role });
 

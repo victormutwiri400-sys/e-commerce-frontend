@@ -1,21 +1,15 @@
-import axios from "axios";
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "./api";
-import CreateAdmin from "./CreateAdmin";
-import { isAdminUser, getCurrentUser } from "./auth";
+import { isAdminUser } from "./auth";
 
 function AdminDashboard() {
   const navigate = useNavigate();
   const [authorized, setAuthorized] = useState(false);
   const [allOrders, setAllOrders] = useState([]);
-  const [adminMsg, setAdminMsg] = useState("");
   const [allProducts, setAllProducts] = useState([]);
   const [allUsers, setAllUsers] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [productsLoading, setProductsLoading] = useState(false);
-  const [usersLoading, setUsersLoading] = useState(false);
-  const [singleUserLoading, setSingleUserLoading] = useState(false);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState("orders");
   const [progress, setProgress] = useState(0);
@@ -30,6 +24,7 @@ function AdminDashboard() {
     color: "",
     size: "",
     stock_quantity: "",
+    adminMsg: "",
   });
   const [productMsg, setProductMsg] = useState("");
 
@@ -41,6 +36,7 @@ function AdminDashboard() {
     email: "",
     new_password: "",
     phone: "",
+    adminMsg: "",
   });
 
   // Standalone Variant form (for adding extra variants to existing products)
@@ -51,6 +47,8 @@ function AdminDashboard() {
     stock_quantity: 0,
   });
   const [variantMsg, setVariantMsg] = useState("");
+  // Product that has no variant yet — used to show an "Add Product" button
+  const [noVariantProduct, setNoVariantProduct] = useState(null);
 
   // Update product
   const [updateProductForm, setUpdateProductForm] = useState({
@@ -80,15 +78,11 @@ function AdminDashboard() {
   const [deleteVariantMsg, setDeleteVariantMsg] = useState("");
 
   // Get user by ID
-  const [userId, setUserId] = useState("");
+  const [searchUserId, setSearchUserId] = useState("");
   const [singleUser, setSingleUser] = useState(null);
 
   // Update order status
-  const [updateOrderId, setUpdateOrderId] = useState("");
-  const [orderStatus, setOrderStatus] = useState("pending");
-
   useEffect(() => {
-    const user = getCurrentUser();
     if (!isAdminUser()) {
       alert("Access Denied: Admins Only!");
       navigate("/");
@@ -96,7 +90,6 @@ function AdminDashboard() {
     }
     setAuthorized(true);
     fetchAllOrders();
-    fetchAllProducts();
     fetchAllUsers();
   }, [navigate]);
 
@@ -119,28 +112,22 @@ function AdminDashboard() {
   };
 
   const fetchAllProducts = async () => {
-    setProductsLoading(true);
     try {
       const response = await api.get("/products");
       setAllProducts(response.data || []);
     } catch (err) {
       console.error("Product Fetch Error:", err.message);
       setError("Failed to load products");
-    } finally {
-      setProductsLoading(false);
     }
   };
 
   const fetchAllUsers = async () => {
-    setUsersLoading(true);
     try {
       const response = await api.get("/users");
       setAllUsers(response.data || []);
     } catch (err) {
       console.error("User Fetch Error:", err.message);
       setError("Failed to load users");
-    } finally {
-      setUsersLoading(false);
     }
   };
 
@@ -212,6 +199,7 @@ function AdminDashboard() {
         stock_quantity: Number(variantForm.stock_quantity),
       });
       setVariantMsg("Variant created successfully");
+      setNoVariantProduct(null);
       setVariantForm({
         product_id: "",
         color: "",
@@ -273,6 +261,7 @@ function AdminDashboard() {
 
       await api.put(`/variants/${updateVariantForm.id}`, payload);
       setUpdateVariantMsg("Variant updated successfully");
+      setNoVariantProduct(null);
       setUpdateVariantForm({ id: "", color: "", size: "", stock_quantity: "" });
       fetchAllProducts();
     } catch (err) {
@@ -326,35 +315,32 @@ function AdminDashboard() {
     setAdminForm({ ...adminForm, [e.target.name]: e.target.value });
 
   const createAdmin = async (e) => {
-    e.preventDefault();
-    setAdminMsg("");
+    e.preventDefault(); // Prevent default form submission
+    setAdminForm((prev) => ({ ...prev, adminMsg: "" })); // Clear previous message
     try {
-      const { data } = await api.post("/api/createAdmin", adminForm);
-      setAdminMsg(data.message);
+      const { data } = await api.post("/api/createAdmin", adminForm); // Assuming this is the correct endpoint
+      setAdminForm((prev) => ({ ...prev, adminMsg: data.message }));
     } catch (err) {
-      setAdminMsg(
+      setAdminForm((prev) => ({
+        ...prev,
+        adminMsg:
         err.response?.data?.message ||
           err.response?.data?.error ||
-          "Something went wrong",
-      );
+          "Something went wrong", // Generic error message
+      }));
     }
   };
 
   const fetchSingleUser = async () => {
-    if (!userId) {
-      setError("Enter user ID");
+    if (!searchUserId) {
       return;
     }
-    setError("");
-    setSingleUserLoading(true);
     try {
-      const response = await api.get(`/users/${userId}`);
+      const response = await api.get(`/users/${searchUserId}`);
       setSingleUser(response.data);
     } catch (err) {
-      setError(err.response?.data?.error || "User not found");
+      console.error("Fetch single user error:", err);
       setSingleUser(null);
-    } finally {
-      setSingleUserLoading(false);
     }
   };
 
@@ -381,26 +367,65 @@ function AdminDashboard() {
       ?.scrollIntoView({ behavior: "smooth", block: "center" });
   };
 
+  // Smooth-scroll to the Update Variant form once the Variants tab is rendered
+  const scrollToUpdateVariantCard = () => {
+    setTimeout(() => {
+      document
+        .getElementById("update-variant-card")
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 50);
+  };
+
+  // Redirect to the "Add Additional Variant" form (Variants tab) for this product
+  const redirectToAddVariant = (product) => {
+    setUpdateVariantMsg("");
+    setVariantMsg("");
+    setNoVariantProduct(null);
+    setActiveTab("variants");
+    // Pre-select the product that is missing a variant
+    setVariantForm((prev) => ({ ...prev, product_id: product.id }));
+    setTimeout(() => {
+      document
+        .getElementById("add-variant-card")
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 50);
+  };
+
   // Prefill & scroll to the Update Variant form with the first variant's ID
   const handleUpdateVariant = async (product) => {
+    // Automatically redirect the admin to the Variants tab where the form lives
+    setActiveTab("variants");
+    setNoVariantProduct(null);
     let variants = product.variants;
     // The /products list response may not always include variants, so fetch
     // the full product detail (which always includes variants) when needed.
     if (!variants || variants.length === 0) {
-      setVariantMsg(`Loading variants for "${product.title}"...`);
+      setUpdateVariantMsg(`Loading variants for "${product.title}"...`);
       try {
         const res = await api.get(`/products/${product.id}`);
         variants = res.data?.variants || [];
       } catch (err) {
-        setVariantMsg(
+        setUpdateVariantMsg(
           "Error: " + (err.response?.data?.error || err.message),
         );
+        scrollToUpdateVariantCard();
         return;
       }
     }
     if (!variants || variants.length === 0) {
-      alert("This product has no variants to update.");
-      setVariantMsg("");
+      // No variant exists on this product — show the message together with an
+      // "Add Product" button so the admin can add one.
+      setUpdateVariantForm({
+        id: "",
+        color: "",
+        size: "",
+        stock_quantity: "",
+      });
+      setNoVariantProduct(product);
+      setUpdateVariantMsg(
+        `Product "${product.title}" (ID: ${product.id}) has no variants. Please add a variant to this product first.`,
+      );
+      scrollToUpdateVariantCard();
       return;
     }
     const variant = variants[0];
@@ -410,10 +435,8 @@ function AdminDashboard() {
       size: variant.size || "",
       stock_quantity: variant.stock_quantity ?? "",
     });
-    setVariantMsg("");
-    document
-      .getElementById("update-variant-card")
-      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setUpdateVariantMsg("");
+    scrollToUpdateVariantCard();
   };
 
   if (!authorized) return null;
@@ -445,6 +468,9 @@ function AdminDashboard() {
             onClick={() => setActiveTab("products")}
           >
             Products
+          </button>
+          <button className="btn btn-light btn-sm" onClick={fetchAllProducts}>
+            Refresh Products
           </button>
         </li>
         <li className="nav-item">
@@ -809,7 +835,7 @@ function AdminDashboard() {
                           <td>
                             <div className="dropdown">
                               <button
-                                className="btn btn-sm btn-warning dropdown-toggle"
+                                className="btn btn-sm btn-warning dropdown-toggle update-dropdown-btn"
                                 type="button"
                                 data-bs-toggle="dropdown"
                                 aria-expanded="false"
@@ -819,7 +845,7 @@ function AdminDashboard() {
                               <ul className="dropdown-menu">
                                 <li>
                                   <button
-                                    className="dropdown-item"
+                                    className="dropdown-item update-dropdown-item"
                                     onClick={() => handleUpdateProduct(product)}
                                   >
                                     Update product (ID: {product.id})
@@ -827,7 +853,7 @@ function AdminDashboard() {
                                 </li>
                                 <li>
                                   <button
-                                    className="dropdown-item"
+                                    className="dropdown-item update-dropdown-item"
                                     onClick={() => handleUpdateVariant(product)}
                                   >
                                     Update variant
@@ -855,7 +881,7 @@ function AdminDashboard() {
         <>
           <div className="row g-3 mb-4">
             <div className="col-md-6">
-              <div className="card shadow-sm p-4">
+              <div className="card shadow-sm p-4" id="add-variant-card">
                 <h5 className="fw-bold mb-3">Add Additional Variant</h5>
                 {variantMsg && (
                   <div className="alert alert-info">{variantMsg}</div>
@@ -919,7 +945,20 @@ function AdminDashboard() {
               <div className="card shadow-sm p-4 mb-3" id="update-variant-card">
                 <h5 className="fw-bold mb-3">Update Variant</h5>
                 {updateVariantMsg && (
-                  <div className="alert alert-info">{updateVariantMsg}</div>
+                  <div className="alert alert-info">
+                    {updateVariantMsg}
+                    {noVariantProduct && (
+                      <div className="mt-2">
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-primary"
+                          onClick={() => redirectToAddVariant(noVariantProduct)}
+                        >
+                          Add Variant
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 )}
                 <form onSubmit={submitUpdateVariant}>
                   <input
@@ -1072,8 +1111,8 @@ function AdminDashboard() {
               <button className="btn btn-success mt-2">Create Admin</button>
             </form>
 
-            {adminMsg && (
-              <div className="alert alert-info mt-2">{adminMsg}</div>
+            {adminForm.adminMsg && (
+              <div className="alert alert-info mt-2">{adminForm.adminMsg}</div>
             )}
           </div>
           <div className="card shadow-sm mb-4 p-4">
@@ -1083,8 +1122,8 @@ function AdminDashboard() {
                 type="number"
                 className="form-control"
                 placeholder="Enter user ID"
-                value={userId}
-                onChange={(e) => setUserId(e.target.value)}
+                value={searchUserId}
+                onChange={(e) => setSearchUserId(e.target.value)}
               />
               <button className="btn btn-primary" onClick={fetchSingleUser}>
                 Search

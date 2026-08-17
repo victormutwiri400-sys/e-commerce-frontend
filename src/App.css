@@ -115,6 +115,51 @@ body::after {
   border-radius: 1rem;
 }
 
+/* Admin "Update" dropdown button — bright color change on hover */
+.update-dropdown-btn {
+  transition: background-color 0.25s ease, border-color 0.25s ease,
+    color 0.25s ease, box-shadow 0.25s ease;
+}
+
+.update-dropdown-btn:hover,
+.update-dropdown-btn:focus,
+.update-dropdown-btn:focus-visible,
+.update-dropdown-btn.show,
+.update-dropdown-btn:active {
+  background-color: #0d6efd !important;
+  border-color: #0d6efd !important;
+  color: #ffffff !important;
+}
+
+.update-dropdown-btn:hover {
+  box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.35);
+}
+
+/* Admin "Update" dropdown menu items — color change on hover */
+.update-dropdown-item {
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.update-dropdown-item:hover,
+.update-dropdown-item:focus,
+.update-dropdown-item:focus-visible,
+.update-dropdown-item:active {
+  background-color: #0d6efd !important;
+  color: #ffffff !important;
+}
+
+/* Navbar brand logo (replaces the E-Commerce text) */
+.navbar-logo {
+  height: 40px;
+  width: 40px;
+  object-fit: cover;
+  border-radius: 50%;
+  background: #ffffff;
+  padding: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow: 0 0.15rem 0.3rem rgba(0, 0, 0, 0.15);
+}
+
 /* 6. Footer stays solid — no blur needed since bg-dark is already opaque,
       but nudge it toward the image's tone so the seam isn't jarring */
 .bg-dark {

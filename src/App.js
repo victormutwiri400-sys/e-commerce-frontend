@@ -2,6 +2,7 @@ import "./App.css";
 import "bootstrap/dist/css/bootstrap.min.css";
 import "bootstrap/dist/js/bootstrap.bundle.min.js";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { useEffect } from "react";
 import Navbar from "./components/navbar";
 import Home from "./components/home";
 import Products from "./components/products";
@@ -16,8 +17,15 @@ import AdminDashboard from "./components/AdminDashboard";
 import Cart from "./components/Cart";
 import Wishlist from "./components/Wishlist";
 import Payment from "./components/payment";
+import { getSessionUser } from "./components/auth";
 
 function App() {
+  // Verify the session against the server on startup and pick up the CSRF
+  // token that is minted for the session (used by authenticated requests).
+  useEffect(() => {
+    getSessionUser();
+  }, []);
+
   return (
     <BrowserRouter>
       <Navbar />
