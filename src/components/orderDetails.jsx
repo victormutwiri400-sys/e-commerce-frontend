@@ -124,8 +124,8 @@ const OrderDetails = () => {
             </span>
           </p>
         </div>
-        <Link className="btn btn-outline-secondary" to="/orders">
-          Back to orders
+        <Link className="btn btn-outline-secondary" to="/products">
+          Back to the store
         </Link>
       </div>
 
