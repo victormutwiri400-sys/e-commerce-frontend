@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import api from "./api";
 import { FaMobileAlt, FaLock, FaCheckCircle, FaShareAlt } from "react-icons/fa";
@@ -7,7 +7,7 @@ const Payment = () => {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const [orderId, setOrderId] = useState(location.state?.orderId || "");
+  const [orderId] = useState(location.state?.orderId || "");
   const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -18,13 +18,7 @@ const Payment = () => {
   const [showAllItems, setShowAllItems] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState("");
 
-  useEffect(() => {
-    if (orderId) {
-      fetchOrderDetails();
-    }
-  }, [orderId]);
-
-  const fetchOrderDetails = async () => {
+  const fetchOrderDetails = useCallback(async () => {
     try {
       const response = await api.get(`/orders/${orderId}`, {
         withCredentials: true,
@@ -34,7 +28,13 @@ const Payment = () => {
     } catch (err) {
       console.error("Could not fetch order items for preview", err);
     }
-  };
+  }, [orderId]);
+
+  useEffect(() => {
+    if (orderId) {
+      fetchOrderDetails();
+    }
+  }, [orderId, fetchOrderDetails]);
 
   const handleMpesaPayment = async (e) => {
     e.preventDefault();

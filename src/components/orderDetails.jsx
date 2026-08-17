@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Link, useParams } from "react-router-dom";
 import api from "./api";
 
@@ -15,40 +15,43 @@ const OrderDetails = () => {
     error: "",
   });
 
-  const fetchOrderDetails = async (isBackground = false) => {
-    if (!isBackground) setLoading(true);
-    setError("");
+  const fetchOrderDetails = useCallback(
+    async (isBackground = false) => {
+      if (!isBackground) setLoading(true);
+      setError("");
 
-    try {
-      const [orderRes, paymentRes] = await Promise.allSettled([
-        api.get(`/orders/${orderId}`),
-        api.get(`/orders/${orderId}/mpesa-payment`),
-      ]);
+      try {
+        const [orderRes, paymentRes] = await Promise.allSettled([
+          api.get(`/orders/${orderId}`),
+          api.get(`/orders/${orderId}/mpesa-payment`),
+        ]);
 
-      if (orderRes.status === "fulfilled") {
-        setOrder(orderRes.value.data);
-      } else if (!isBackground) {
-        setError(
-          orderRes.reason.response?.data?.error || "Unable to load order",
-        );
+        if (orderRes.status === "fulfilled") {
+          setOrder(orderRes.value.data);
+        } else if (!isBackground) {
+          setError(
+            orderRes.reason.response?.data?.error || "Unable to load order",
+          );
+        }
+
+        if (paymentRes.status === "fulfilled") {
+          setPayment(paymentRes.value.data);
+        } else {
+          setPayment(null);
+        }
+      } catch (err) {
+        if (!isBackground) setError("Unable to load order details");
+      } finally {
+        if (!isBackground) setLoading(false);
       }
-
-      if (paymentRes.status === "fulfilled") {
-        setPayment(paymentRes.value.data);
-      } else {
-        setPayment(null);
-      }
-    } catch (err) {
-      if (!isBackground) setError("Unable to load order details");
-    } finally {
-      if (!isBackground) setLoading(false);
-    }
-  };
+    },
+    [orderId],
+  );
 
   // Initial load
   useEffect(() => {
     fetchOrderDetails(false);
-  }, [orderId]);
+  }, [fetchOrderDetails]);
 
   // Auto-poll status every 5 seconds if order is pending and an STK push was sent
   useEffect(() => {
@@ -59,7 +62,7 @@ const OrderDetails = () => {
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [order?.status, orderId]);
+  }, [order, fetchOrderDetails]);
 
   const handlePayment = async (event) => {
     event.preventDefault();

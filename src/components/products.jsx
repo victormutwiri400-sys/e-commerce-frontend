@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import api from "./api";
 import {
@@ -22,15 +22,7 @@ const Products = () => {
   const [message, setMessage] = useState("");
   const [wishlisted, setWishlisted] = useState({});
 
-  useEffect(() => {
-    fetchProducts();
-  }, [category, search]);
-
-  useEffect(() => {
-    fetchWishlist();
-  }, []);
-
-  const fetchWishlist = async () => {
+  const fetchWishlist = useCallback(async () => {
     try {
       const { data } = await api.get("/api/wishlist");
       const state = {};
@@ -39,9 +31,9 @@ const Products = () => {
     } catch (err) {
       console.log(err);
     }
-  };
+  }, []);
 
-  const fetchProducts = async () => {
+  const fetchProducts = useCallback(async () => {
     setLoading(true);
     setError("");
 
@@ -60,7 +52,15 @@ const Products = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [category, search]);
+
+  useEffect(() => {
+    fetchProducts();
+  }, [fetchProducts]);
+
+  useEffect(() => {
+    fetchWishlist();
+  }, [fetchWishlist]);
 
   const addToCart = async (product) => {
     // If the product has variants, the user must pick a specific size/color.
